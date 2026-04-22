@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <title>RGB Histogram Specification - Teknik Informatika</title>
+    <link rel="stylesheet" href="style.css">
+    
+    <!-- MathJax Configuration -->
+    <script>
+        MathJax = {
+            tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] }
+        };
+    </script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+</head>
+
+<body>
+
+    <h2 class="page-title">Simulasi RGB Histogram Specification</h2>
+
+    <div class="controls">
+        <div class="upload-group">
+            <div class="upload-item">
+                <label>1. Foto Asal (RGB):</label>
+                <input type="file" id="uploadAsal" accept="image/*">
+            </div>
+            <div class="upload-item">
+                <label>2. Foto Referensi (Target Tone):</label>
+                <input type="file" id="uploadRef" accept="image/*">
+            </div>
+        </div>
+        <button class="primary-btn" onclick="prosesHistogramRGB()">Jalankan Proses RGB Matching</button>
+    </div>
+
+    <div class="container">
+        <div class="box">
+            <h3>Gambar Asal</h3>
+            <canvas id="canvasAsal"></canvas>
+            <h4>Histogram Asal (Gabungan)</h4>
+            <canvas id="histAsal" class="hist-canvas" width="256" height="150"></canvas>
+        </div>
+
+        <div class="box">
+            <h3>Gambar Referensi</h3>
+            <canvas id="canvasRef"></canvas>
+            <h4>Histogram Referensi</h4>
+            <canvas id="histRef" class="hist-canvas" width="256" height="150"></canvas>
+        </div>
+
+        <div class="box">
+            <h3>Hasil Akhir (RGB)</h3>
+            <canvas id="canvasHasil"></canvas>
+            <h4>Histogram Hasil</h4>
+            <canvas id="histHasil" class="hist-canvas" width="256" height="150"></canvas>
+        </div>
+    </div>
+
+    <div class="formula-section">
+        <h3>Langkah-Langkah Histogram Specification</h3>
+        <p>Proses ini mengubah distribusi warna gambar asal agar menyerupai distribusi warna gambar referensi melalui 4 langkah matematis utama:</p>
+        <ol>
+            <li>
+                <strong>Menghitung Histogram $h(v)$</strong><br>
+                Menghitung frekuensi kemunculan setiap nilai intensitas piksel $v$ ($0 \le v \le 255$) pada masing-masing channel warna (R, G, B) untuk gambar asal dan referensi.
+            </li>
+            <li>
+                <strong>Menghitung Distribusi Kumulatif / CDF (Cumulative Distribution Function)</strong><br>
+                Mencari probabilitas kumulatif untuk setiap intensitas warna menggunakan rumus:<br>
+                $$CDF(v) = \frac{1}{N} \sum_{i=0}^{v} h(i)$$
+                Di mana $N$ adalah total jumlah piksel pada gambar, dan $h(i)$ adalah nilai histogram pada intensitas $i$.
+            </li>
+            <li>
+                <strong>Pencocokan Nilai (Histogram Matching)</strong><br>
+                Untuk setiap nilai intensitas $i$ dari gambar asal, dicari nilai intensitas $j$ dari gambar referensi di mana selisih mutlak antara $CDF_{asal}(i)$ dan $CDF_{ref}(j)$ adalah yang terkecil (minimum).<br>
+                $$j = \arg \min_{k} \left| CDF_{asal}(i) - CDF_{ref}(k) \right|$$
+            </li>
+            <li>
+                <strong>Membentuk Look-Up Table (LUT) & Transformasi</strong><br>
+                Setelah mendapatkan pasangan $(i, j)$ yang paling cocok, dibuat sebuah tabel pemetaan (Look-Up Table). Terakhir, seluruh piksel bernilai $i$ pada gambar asal akan dikonversi menjadi nilai $j$ pada hasil akhir.
+            </li>
+        </ol>
+    </div>
+
+    <div class="formula-section" id="tableSection" style="display: none;">
+        <h3>Tabel Mapping & Detail Perhitungan (LUT)</h3>
+        <p>Berikut adalah hasil perhitungan pencocokan CDF dan Look-Up Table (LUT) untuk masing-masing channel RGB berdasarkan gambar yang Anda upload. (Tabel dapat di-scroll)</p>
+        <div class="table-responsive">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th rowspan="2">Intensitas<br>(Input)</th>
+                        <th colspan="3">Channel Merah (Red)</th>
+                        <th colspan="3">Channel Hijau (Green)</th>
+                        <th colspan="3">Channel Biru (Blue)</th>
+                    </tr>
+                    <tr>
+                        <th>CDF Asal</th>
+                        <th>CDF Ref (Target)</th>
+                        <th>Map (Output)</th>
+                        <th>CDF Asal</th>
+                        <th>CDF Ref (Target)</th>
+                        <th>Map (Output)</th>
+                        <th>CDF Asal</th>
+                        <th>CDF Ref (Target)</th>
+                        <th>Map (Output)</th>
+                    </tr>
+                </thead>
+                <tbody id="lutTableBody">
+                    <!-- Data will be injected here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Fungsi untuk ambil Histogram & CDF per Channel (R, G, B)
+        function getRGBStats(ctx, canvas) {
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imgData.data;
+
+            let stats = {
+                r: { hist: new Array(256).fill(0), cdf: new Array(256).fill(0) },
+                g: { hist: new Array(256).fill(0), cdf: new Array(256).fill(0) },
+                b: { hist: new Array(256).fill(0), cdf: new Array(256).fill(0) },
+                imgData: imgData
+            };
+
+            for (let i = 0; i < data.length; i += 4) {
+                stats.r.hist[data[i]]++;
+                stats.g.hist[data[i + 1]]++;
+                stats.b.hist[data[i + 2]]++;
+            }
+
+            const totalPixel = canvas.width * canvas.height;
+            ['r', 'g', 'b'].forEach(ch => {
+                let cum = 0;
+                for (let i = 0; i < 256; i++) {
+                    cum += stats[ch].hist[i];
+                    stats[ch].cdf[i] = cum / totalPixel;
+                }
+            });
+
+            return stats;
+        }
+
+        // Fungsi bikin Tabel Pemetaan (LUT) per channel
+        function createLUT(cdfAsal, cdfRef) {
+            let lut = new Array(256).fill(0);
+            for (let i = 0; i < 256; i++) {
+                let j = 0;
+                let minDiff = Math.abs(cdfAsal[i] - cdfRef[0]);
+                let bestJ = 0;
+                for (let k = 1; k < 256; k++) {
+                    let diff = Math.abs(cdfAsal[i] - cdfRef[k]);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        bestJ = k;
+                    }
+                }
+                lut[i] = bestJ;
+            }
+            return lut;
+        }
+
+        function drawHistogramRGB(canvasId, stats) {
+            const canvas = document.getElementById(canvasId);
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const maxVal = Math.max(...stats.r.hist, ...stats.g.hist, ...stats.b.hist);
+
+            const drawCh = (hist, color) => {
+                ctx.strokeStyle = color;
+                ctx.beginPath();
+                for (let i = 0; i < 256; i++) {
+                    let h = (hist[i] / maxVal) * canvas.height;
+                    ctx.moveTo(i, canvas.height);
+                    ctx.lineTo(i, canvas.height - h);
+                }
+                ctx.stroke();
+            };
+
+            ctx.globalCompositeOperation = 'screen';
+            drawCh(stats.r.hist, 'rgba(255,100,100,0.8)');
+            drawCh(stats.g.hist, 'rgba(100,255,100,0.8)');
+            drawCh(stats.b.hist, 'rgba(100,100,255,0.8)');
+            ctx.globalCompositeOperation = 'source-over';
+        }
+
+        function prosesHistogramRGB() {
+            const cAsal = document.getElementById('canvasAsal');
+            const cRef = document.getElementById('canvasRef');
+            const cHasil = document.getElementById('canvasHasil');
+
+            if (!cAsal.width || !cRef.width) return alert("Upload dulu fotonya Nia!");
+
+            const statsAsal = getRGBStats(cAsal.getContext('2d'), cAsal);
+            const statsRef = getRGBStats(cRef.getContext('2d'), cRef);
+
+            // Buat LUT untuk masing-masing channel
+            const lutR = createLUT(statsAsal.r.cdf, statsRef.r.cdf);
+            const lutG = createLUT(statsAsal.g.cdf, statsRef.g.cdf);
+            const lutB = createLUT(statsAsal.b.cdf, statsRef.b.cdf);
+
+            // Terapkan ke gambar
+            cHasil.width = cAsal.width;
+            cHasil.height = cAsal.height;
+            const ctxHasil = cHasil.getContext('2d');
+            let resData = ctxHasil.createImageData(cAsal.width, cAsal.height);
+
+            for (let i = 0; i < statsAsal.imgData.data.length; i += 4) {
+                resData.data[i] = lutR[statsAsal.imgData.data[i]];   // Red
+                resData.data[i + 1] = lutG[statsAsal.imgData.data[i + 1]]; // Green
+                resData.data[i + 2] = lutB[statsAsal.imgData.data[i + 2]]; // Blue
+                resData.data[i + 3] = 255; // Alpha
+            }
+            ctxHasil.putImageData(resData, 0, 0);
+
+            // Update Grafik
+            drawHistogramRGB('histAsal', statsAsal);
+            drawHistogramRGB('histRef', statsRef);
+            drawHistogramRGB('histHasil', getRGBStats(ctxHasil, cHasil));
+
+            // Generate Table
+            generateLUTTable(statsAsal, statsRef, lutR, lutG, lutB);
+        }
+
+        function generateLUTTable(statsAsal, statsRef, lutR, lutG, lutB) {
+            const tbody = document.getElementById('lutTableBody');
+            let html = '';
+            for (let i = 0; i < 256; i++) {
+                html += `<tr>
+                    <td><b>${i}</b></td>
+                    <td style="color: #d9534f;">${statsAsal.r.cdf[i].toFixed(4)}</td>
+                    <td style="color: #d9534f;">${statsRef.r.cdf[lutR[i]].toFixed(4)}</td>
+                    <td><b>${lutR[i]}</b></td>
+                    <td style="color: #5cb85c;">${statsAsal.g.cdf[i].toFixed(4)}</td>
+                    <td style="color: #5cb85c;">${statsRef.g.cdf[lutG[i]].toFixed(4)}</td>
+                    <td><b>${lutG[i]}</b></td>
+                    <td style="color: #0275d8;">${statsAsal.b.cdf[i].toFixed(4)}</td>
+                    <td style="color: #0275d8;">${statsRef.b.cdf[lutB[i]].toFixed(4)}</td>
+                    <td><b>${lutB[i]}</b></td>
+                </tr>`;
+            }
+            tbody.innerHTML = html;
+            document.getElementById('tableSection').style.display = 'block';
+        }
+
+        function handleUpload(inputId, canvasId) {
+            document.getElementById(inputId).onchange = function (e) {
+                const reader = new FileReader();
+                reader.onload = function (event) {
+                    const img = new Image();
+                    img.onload = function () {
+                        const canvas = document.getElementById(canvasId);
+                        const ctx = canvas.getContext('2d');
+                        let scale = Math.min(300 / img.width, 300 / img.height);
+                        canvas.width = img.width * scale;
+                        canvas.height = img.height * scale;
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    }
+                    img.src = event.target.result;
+                }
+                reader.readAsDataURL(e.target.files[0]);
+            }
+        }
+
+        handleUpload('uploadAsal', 'canvasAsal');
+        handleUpload('uploadRef', 'canvasRef');
+    </script>
+
+</body>
+
+</html>
